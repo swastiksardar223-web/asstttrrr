@@ -1,0 +1,150 @@
+import os
+import glob
+import warnings
+import numpy as np
+import matplotlib.pyplot as plt
+from astropy.io import fits
+from astropy.modeling.models import Chebyshev1D
+from astropy.modeling.fitting import FittingWithOutlierRemoval, LinearLSQFitter
+from astropy.stats import sigma_clip
+
+# =============================================================================
+# --- CONFIGURE YOUR SETTINGS HERE ---
+# =============================================================================
+
+# 1. Set the path to the directory containing your files.
+INPUT_DIR = os.path.expanduser("/home/swastik/Desktop/WR127_Fresh_Data")
+
+# 2. Set the path to the directory where you want to save the new, normalised files.
+OUTPUT_DIR = os.path.expanduser("/home/swastik/Desktop/WR127_Fresh_Data/Normalized_Spectra")
+
+# 3. Set the path for the diagnostic plots. A subfolder will be created here.
+PLOT_DIR = os.path.expanduser("/home/swastik/Desktop/WR127_Fresh_Data/Normalization_Plots")
+
+# 4. Set the degree of the polynomial to fit the continuum.
+POLY_DEGREE = 4
+
+# 5. Set the outlier rejection threshold.
+SIGMA_CLIP = 3.0
+
+# =============================================================================
+# --- MAIN SCRIPT (No changes needed below this line) ---
+# =============================================================================
+
+def normalize_spectrum(fits_filepath, output_filepath, plot_filepath_prefix):
+    """
+    Reads a 1D FITS spectrum, fits the continuum, normalises the spectrum,
+    and saves the result to a new FITS file, as well as diagnostic plots.
+    """
+    try:
+        basename = os.path.basename(fits_filepath)
+        
+        # Open the FITS file
+        with fits.open(fits_filepath) as hdul:
+            header = hdul[0].header
+            flux = hdul[0].data.astype(np.float64)
+
+            # Create the wavelength axis from the header keywords
+            n_pixels = header['NAXIS1']
+            crval = header['CRVAL1']
+            cdelt = header['CDELT1']
+            crpix = header.get('CRPIX1', 1)  # CRPIX1 is 1-based
+            
+            wavelength = crval + (np.arange(n_pixels) - (crpix - 1)) * cdelt
+
+            # 1. Define the fitting algorithm
+            fitter = LinearLSQFitter()
+            
+            # Wrap the fitter in the outlier removal tool
+            fit_with_rejection = FittingWithOutlierRemoval(
+                fitter,
+                sigma_clip, # Use the sigma_clip function for outlier detection
+                niter=3,
+                sigma=SIGMA_CLIP
+            )
+
+            # 2. Define the model for the continuum
+            continuum_model = Chebyshev1D(degree=POLY_DEGREE)
+
+            # 3. Fit the model to the data
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', UserWarning)
+                fitted_continuum_model, mask = fit_with_rejection(
+                    continuum_model, wavelength, flux
+                )
+            
+            # 4. Calculate the continuum from the fitted model
+            continuum = fitted_continuum_model(wavelength)
+
+            # 5. Normalize the flux by dividing by the continuum
+            normalized_flux = flux / continuum
+
+            # --- PLOTTING SECTION ---
+            # Plot 1: Original Spectrum and Continuum Fit
+            plt.figure(figsize=(12, 6))
+            plt.plot(wavelength, flux, label='Original Flux')
+            plt.plot(wavelength, continuum, label='Fitted Continuum', linestyle='--', color='red')
+            plt.title(f'Continuum Fit for {basename}')
+            plt.xlabel('Wavelength (Angstrom)')
+            plt.ylabel('Flux')
+            plt.legend()
+            plt.grid(True, alpha=0.5)
+            plt.savefig(f"{plot_filepath_prefix}_fit.png", dpi=150)
+            plt.close()
+
+            # Plot 2: Final Normalized Spectrum
+            plt.figure(figsize=(12, 6))
+            plt.plot(wavelength, normalized_flux, label='Normalized Flux')
+            plt.axhline(1.0, linestyle='--', color='red', label='Continuum Level')
+            plt.title(f'Normalized Spectrum for {basename}')
+            plt.xlabel('Wavelength (Angstrom)')
+            plt.ylabel('Normalized Flux')
+            plt.ylim(min(0.5, np.nanmin(normalized_flux) - 0.1), max(1.5, np.nanmax(normalized_flux) + 0.1))
+            plt.legend()
+            plt.grid(True, alpha=0.5)
+            plt.savefig(f"{plot_filepath_prefix}_norm.png", dpi=150)
+            plt.close()
+            
+            # --- SAVE NORMALIZED FITS ---
+            new_hdu = fits.PrimaryHDU(data=normalized_flux, header=header)
+            new_hdu.header['HISTORY'] = 'Continuum normalized using a Chebyshev polynomial.'
+            new_hdu.writeto(output_filepath, overwrite=True)
+
+            # --- ADDED: SAVE AS HEADERLESS TXT FILE ---
+            text_output_filepath = output_filepath.replace('.fits', '.txt')
+            data_to_save = np.column_stack((wavelength, normalized_flux))
+            np.savetxt(text_output_filepath, data_to_save, fmt='%.8f')
+
+        print(f"  -> Successfully normalized and saved to {os.path.basename(output_filepath)}")
+        print(f"  -> Headerless TXT saved to {os.path.basename(text_output_filepath)}")
+        print(f"  -> Diagnostic plots saved.")
+
+    except Exception as e:
+        print(f"  -> ERROR processing {basename}: {e}")
+
+if __name__ == '__main__':
+    # Create the output directories if they don't exist
+    for dir_path in [OUTPUT_DIR, PLOT_DIR]:
+        if not os.path.exists(dir_path):
+            os.makedirs(dir_path)
+            print(f"Created directory: {dir_path}")
+
+    # Find all FITS files in the input directory
+    search_path = os.path.join(INPUT_DIR, '*.fits')
+    file_list = sorted(glob.glob(search_path))
+
+    if not file_list:
+        print(f"Error: No .fits files found in {INPUT_DIR}")
+    else:
+        print(f"Found {len(file_list)} FITS files to process in {INPUT_DIR}")
+        
+        # Process each file
+        for fits_file in file_list:
+            basename = os.path.basename(fits_file)
+            output_fits_file = os.path.join(OUTPUT_DIR, basename)
+            plot_prefix = os.path.join(PLOT_DIR, os.path.splitext(basename)[0])
+            
+            print(f"\nProcessing {basename}...")
+            normalize_spectrum(fits_file, output_fits_file, plot_prefix)
+
+        print("\n--- Normalization complete! ---")
