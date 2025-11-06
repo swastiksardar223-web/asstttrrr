@@ -1,0 +1,33 @@
+from astropy.io import fits
+import matplotlib.pyplot as plt
+import numpy as np
+
+fname = "/home/swastik/Desktop/127CFHT/Normalized_Spectra/WR127_1.fits"  # change 
+hd = fits.open(fname)
+hdr = hd[0].header
+data = hd[0].data.astype(float)
+crval = hdr.get('CRVAL1', hdr.get('CRVAL'))
+cdelt = hdr.get('CDELT1', hdr.get('CD1_1'))
+crpix = hdr.get('CRPIX1', 1.0)
+wl = float(crval) + (np.arange(data.size) + 1 - float(crpix)) * float(cdelt)
+
+print("Important header keys:")
+for k in ['HJD','MJD-OBS','DATE-OBS','EXPTIME','CRVAL1','CDELT1','NAXIS1','HISTORY']:
+    print(k, ":", hdr.get(k))
+
+# plot whole spectrum
+plt.figure(figsize=(10,4))
+plt.plot(wl, data)
+plt.xlim(5150, 5950)
+plt.ylim(0.6, 1.5)
+plt.xlabel("Wavelength (A)"); plt.ylabel("Flux (normalized)")
+plt.axvline(5875.625, color='red', linestyle='--', label='He I 5876')
+plt.legend()
+plt.show()
+
+# zoom He I window
+mask = (wl > 5860) & (wl < 5890)
+plt.figure(figsize=(8,3))
+plt.plot(wl[mask], data[mask], marker='o', ms=2)
+plt.axvline(5875.625, color='red'); plt.title("He I 5876 window")
+plt.show()
